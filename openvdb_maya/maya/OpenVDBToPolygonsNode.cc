@@ -98,10 +98,89 @@ namespace {
 mvdb::NodeRegistry registerNode("OpenVDBToPolygons", OpenVDBToPolygonsNode::id,
     OpenVDBToPolygonsNode::creator, OpenVDBToPolygonsNode::initialize);
 
+
 // Internal utility methods
 
 class VDBToMayaMesh
 {
+
+struct PointCopyOp
+{
+    PointCopyOp(MFloatPointArray& mayaPoints, const openvdb::tools::PointList& vdbPoints)
+        : mMayaPoints(&mayaPoints) , mVdbPoints(&vdbPoints) { }
+
+    void operator()(const tbb::blocked_range<size_t>& range) const {
+        for (size_t n = range.begin(),  N = range.end(); n < N; ++n) {
+            const openvdb::Vec3s& p_vdb = (*mVdbPoints)[n];
+            MFloatPoint& p_maya = (*mMayaPoints)[n];
+            p_maya[0] = p_vdb[0];
+            p_maya[1] = p_vdb[1];
+            p_maya[2] = p_vdb[2];
+        }
+    }
+
+private:
+    MFloatPointArray * const mMayaPoints;
+    openvdb::tools::PointList const * const mVdbPoints;
+};
+
+
+struct FaceCopyOp
+{
+    typedef boost::scoped_array<uint32_t> UInt32Array;
+
+    FaceCopyOp(MIntArray& indices, MIntArray& polyCount,
+        const UInt32Array& numQuadsPrefix, const UInt32Array& numTrianglesPrefix,
+        const openvdb::tools::PolygonPoolList& polygonPoolList)
+        : mIndices(&indices)
+        , mPolyCount(&polyCount)
+        , mNumQuadsPrefix(numQuadsPrefix.get())
+        , mNumTrianglesPrefix(numTrianglesPrefix.get())
+        , mPolygonPoolList(&polygonPoolList)
+    {
+    }
+
+    void operator()(const tbb::blocked_range<size_t>& range) const {
+        const uint32_t numQuads = mNumQuadsPrefix[range.begin()];
+        const uint32_t numTriangles = mNumTrianglesPrefix[range.begin()];
+
+        uint32_t face = numQuads + numTriangles;
+        uint32_t vertex = 4*numQuads + 3*numTriangles;
+
+        MIntArray& indices = *mIndices;
+        MIntArray& polyCount = *mPolyCount;
+
+        // Setup the polygon count and polygon indices
+        for (size_t n = range.begin(), N = range.end(); n < N; ++n) {
+            const openvdb::tools::PolygonPool& polygons = (*mPolygonPoolList)[n];
+            // Add all quads in the polygon pool
+            for (size_t i = 0, I = polygons.numQuads(); i < I; ++i) {
+                polyCount[face++] = 4;
+                const openvdb::Vec4I& quad = polygons.quad(i);
+                indices[vertex++] = quad[0];
+                indices[vertex++] = quad[1];
+                indices[vertex++] = quad[2];
+                indices[vertex++] = quad[3];
+            }
+            // Add all triangles in the polygon pool
+            for (size_t i = 0, I = polygons.numTriangles(); i < I; ++i) {
+                polyCount[face++] = 3;
+                const openvdb::Vec3I& triangle = polygons.triangle(i);
+                indices[vertex++] = triangle[0];
+                indices[vertex++] = triangle[1];
+                indices[vertex++] = triangle[2];
+            }
+        }
+    }
+
+private:
+    MIntArray * const mIndices;
+    MIntArray * const mPolyCount;
+    uint32_t const * const mNumQuadsPrefix;
+    uint32_t const * const mNumTrianglesPrefix;
+    openvdb::tools::PolygonPoolList const * const mPolygonPoolList;
+};
+
 public:
 
     MObject mesh;
@@ -157,87 +236,10 @@ public:
 
 private:
     openvdb::tools::VolumeToMesh * const mMesher;
-    struct PointCopyOp;
-    struct FaceCopyOp;
+    //struct PointCopyOp;
+    //struct FaceCopyOp;
 }; // VDBToMayaMesh
 
-
-struct VDBToMayaMesh::PointCopyOp
-{
-    PointCopyOp(MFloatPointArray& mayaPoints, const openvdb::tools::PointList& vdbPoints)
-        : mMayaPoints(&mayaPoints) , mVdbPoints(&vdbPoints) { }
-
-    void operator()(const tbb::blocked_range<size_t>& range) const {
-        for (size_t n = range.begin(),  N = range.end(); n < N; ++n) {
-            const openvdb::Vec3s& p_vdb = (*mVdbPoints)[n];
-            MFloatPoint& p_maya = (*mMayaPoints)[n];
-            p_maya[0] = p_vdb[0];
-            p_maya[1] = p_vdb[1];
-            p_maya[2] = p_vdb[2];
-        }
-    }
-
-private:
-    MFloatPointArray * const mMayaPoints;
-    openvdb::tools::PointList const * const mVdbPoints;
-};
-
-
-struct VDBToMayaMesh::FaceCopyOp
-{
-    typedef boost::scoped_array<uint32_t> UInt32Array;
-
-    FaceCopyOp(MIntArray& indices, MIntArray& polyCount,
-        const UInt32Array& numQuadsPrefix, const UInt32Array& numTrianglesPrefix,
-        const openvdb::tools::PolygonPoolList& polygonPoolList)
-        : mIndices(&indices)
-        , mPolyCount(&polyCount)
-        , mNumQuadsPrefix(numQuadsPrefix.get())
-        , mNumTrianglesPrefix(numTrianglesPrefix.get())
-        , mPolygonPoolList(&polygonPoolList)
-    {
-    }
-
-    void operator()(const tbb::blocked_range<size_t>& range) const {
-        const uint32_t numQuads = mNumQuadsPrefix[range.begin()];
-        const uint32_t numTriangles = mNumTrianglesPrefix[range.begin()];
-
-        uint32_t face = numQuads + numTriangles;
-        uint32_t vertex = 4*numQuads + 3*numTriangles;
-
-        MIntArray& indices = *mIndices;
-        MIntArray& polyCount = *mPolyCount;
-
-        // Setup the polygon count and polygon indices
-        for (size_t n = range.begin(), N = range.end(); n < N; ++n) {
-            const openvdb::tools::PolygonPool& polygons = (*mPolygonPoolList)[n];
-            // Add all quads in the polygon pool
-            for (size_t i = 0, I = polygons.numQuads(); i < I; ++i) {
-                polyCount[face++] = 4;
-                const openvdb::Vec4I& quad = polygons.quad(i);
-                indices[vertex++] = quad[0];
-                indices[vertex++] = quad[1];
-                indices[vertex++] = quad[2];
-                indices[vertex++] = quad[3];
-            }
-            // Add all triangles in the polygon pool
-            for (size_t i = 0, I = polygons.numTriangles(); i < I; ++i) {
-                polyCount[face++] = 3;
-                const openvdb::Vec3I& triangle = polygons.triangle(i);
-                indices[vertex++] = triangle[0];
-                indices[vertex++] = triangle[1];
-                indices[vertex++] = triangle[2];
-            }
-        }
-    }
-
-private:
-    MIntArray * const mIndices;
-    MIntArray * const mPolyCount;
-    uint32_t const * const mNumQuadsPrefix;
-    uint32_t const * const mNumTrianglesPrefix;
-    openvdb::tools::PolygonPoolList const * const mPolygonPoolList;
-};
 
 
 } // unnamed namespace

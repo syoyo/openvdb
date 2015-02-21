@@ -62,6 +62,7 @@
 #include <iostream>
 #include <sstream>
 #include <limits>
+#include <algorithm>
 
 #include <boost/algorithm/string.hpp>
 #include <boost/lexical_cast.hpp>
@@ -820,7 +821,7 @@ public:
         unsigned voxelCount = 0;
         for (size_t l = 0, L = leafs.leafCount(); l < L; ++l) {
             indexMap[l] = voxelCount;
-            voxelCount += std::min(leafs.leaf(l).onVoxelCount(), voxelsPerLeaf);
+            voxelCount += std::min((unsigned)(leafs.leaf(l).onVoxelCount()), (unsigned)voxelsPerLeaf);
         }
 
         std::vector<GLfloat>
